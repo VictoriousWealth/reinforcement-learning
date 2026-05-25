@@ -82,8 +82,11 @@ Please use the provided `QTable` as given in this assignment. You should not
 need to modify `environment.py` or `qtable.py`.
 """
 
+from pathlib import Path
 from typing import Tuple
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -112,19 +115,19 @@ SMOKE_TEST_CURVE_EVAL_GAMES = 200   # Evaluation games averaged into each progre
 SMOKE_TEST_FINAL_EVAL_GAMES = 500   # Evaluation games used for the smoke-test baseline and final score
 
 # Experiment 1 settings: history-length sweep
-HISTORY_LENGTHS = (1, 2)            # History lengths to compare in Experiment 1; please expand this range for your study
+HISTORY_LENGTHS = (1, 2, 3, 4)      # History lengths to compare in Experiment 1
 HISTORY_SWEEP_EPSILON = 0.2         # Fixed epsilon while comparing history lengths
 SWEEP_NUM_EPISODES = 10_000         # Training episodes in each run of Experiments 1 and 2
 SWEEP_RUNS = 10                     # Default `num_runs` in Experiments 1 and 2 for quick testing
 SWEEP_EVAL_GAMES = 500              # Evaluation games used to score each tested setting in Experiments 1 and 2
 
 # Experiment 2 settings: epsilon sweep
-EPSILON_SWEEP_HISTORY_LENGTH = 1    # Placeholder history length for Experiment 2; update after Experiment 1
-EPSILON_VALUES = (0.0, 0.1)         # Starting epsilon values for Experiment 2; expand in the interval [0,1)
+EPSILON_SWEEP_HISTORY_LENGTH = 2    # Best setting from the history-length sweep
+EPSILON_VALUES = (0.0, 0.05, 0.1, 0.2, 0.3, 0.5)  # Coarse sweep across low to moderate exploration
 
 # Experiment 3 settings: learning curves
-CURVE_HISTORY_LENGTH = 1            # Placeholder history length for Experiment 3; update after Experiment 1
-CURVE_EPSILON = 0.0                 # Placeholder epsilon for Experiment 3; update after Experiment 2
+CURVE_HISTORY_LENGTH = 2            # Best setting from the history-length sweep
+CURVE_EPSILON = 0.3                 # Best-performing epsilon from the sweep below
 CURVE_NUM_EPISODES = 10_000         # Training episodes in each learning-curve run
 CURVE_RUNS = 10                     # Default `num_runs` in Experiment 3 for quick testing
 CURVE_EVAL_INTERVAL = 500           # Training episodes between two points on the learning curve
@@ -136,6 +139,8 @@ REPORT_CURVE_RUNS = 10              # Suggested `num_runs` in the final Experime
 
 # Baseline settings
 BASELINE_EVAL_GAMES = 2_000      # Evaluation games used to estimate the random baseline shown in plots/tables
+
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "results"
 
 
 State = Tuple
@@ -177,12 +182,9 @@ class QLearningAgent:
         - np.random.randint(self.env.num_codes) gives a random action
         - self.Q.get_best_action(state) gives the greedy action
         """
-        # --------------------------------------------------------------------
-        # STUDENT TASK: implement epsilon-greedy action selection.
-        # This is a placeholder implementation that always selects a random action.
-        # --------------------------------------------------------------------
-        placeholder_action = int(np.random.randint(self.env.num_codes))
-        return placeholder_action
+        if explore and np.random.rand() < self.epsilon:
+            return int(np.random.randint(self.env.num_codes))
+        return self.Q.get_best_action(state)
 
     def update(
         self,
@@ -200,10 +202,14 @@ class QLearningAgent:
         - self.Q.get_max_value(next_state) returns max Q over actions
         - self.Q.set(state, action, value) stores Q-value
         """
-        # --------------------------------------------------------------------
-        # STUDENT TASK: implement the Q-learning update
-        # --------------------------------------------------------------------
-        pass
+        current_q = self.Q.get(state, action)
+        if done:
+            target = reward
+        else:
+            target = reward + self.gamma * self.Q.get_max_value(next_state)
+        td_error = target - current_q
+        updated_q = current_q + self.eta * td_error
+        self.Q.set(state, action, updated_q)
 
     def train_episode(self) -> Tuple[float, bool, int]:
         """Train for one episode. Returns (total_reward, won, num_turns)."""
@@ -219,6 +225,12 @@ class QLearningAgent:
             state = next_state
 
         return total_reward, info["won"], self.env.turn
+
+
+def ensure_output_dir() -> Path:
+    """Create and return the directory used for saved plots."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return OUTPUT_DIR
 
 
 # ============================================================================
@@ -349,6 +361,49 @@ def print_summary_table(title, label, results):
             f"{r['win_rate_mean'] * 100:>5.1f}% +/- {r['win_rate_std'] * 100:<5.1f}%   "
             f"{r['turns_mean']:>5.2f} +/- {r['turns_std']:<5.2f}"
         )
+
+
+def save_two_panel_plot(
+    x,
+    win_means,
+    win_stds,
+    turn_means,
+    turn_stds,
+    baseline_wr,
+    baseline_turns,
+    xlabel,
+    title_prefix,
+    filename,
+):
+    """Save a standard two-panel comparison plot."""
+    output_dir = ensure_output_dir()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    ax1.plot(x, win_means, "o-", linewidth=2)
+    ax1.fill_between(x, win_means - win_stds, win_means + win_stds, alpha=0.2)
+    ax1.axhline(y=baseline_wr, color="red", linestyle="--", label="Random baseline")
+    ax1.set_xlabel(xlabel)
+    ax1.set_ylabel("Win Rate")
+    ax1.set_title(f"{title_prefix}: Win Rate")
+    ax1.set_ylim(0.0, 1.05)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.plot(x, turn_means, "o-", linewidth=2)
+    ax2.fill_between(x, turn_means - turn_stds, turn_means + turn_stds, alpha=0.2)
+    ax2.axhline(y=baseline_turns, color="red", linestyle="--", label="Random baseline")
+    ax2.set_xlabel(xlabel)
+    ax2.set_ylabel("Average Turns")
+    ax2.set_title(f"{title_prefix}: Average Turns")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    figure_path = output_dir / filename
+    fig.savefig(figure_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved plot to {figure_path}")
 
 
 # ============================================================================
@@ -508,11 +563,18 @@ def experiment_history_length(
     turn_means = np.array([results[h]["turns_mean"] for h in history_lengths])
     turn_stds = np.array([results[h]["turns_std"] for h in history_lengths])
 
-    # --------------------------------------------------------------------
-    # STUDENT TASK: create your comparison plot here.
-    # Use `x`, `win_means`, `win_stds`, `turn_means`, `turn_stds`,
-    # `baseline_wr`, and `baseline_turns`.
-    # --------------------------------------------------------------------
+    save_two_panel_plot(
+        x=x,
+        win_means=win_means,
+        win_stds=win_stds,
+        turn_means=turn_means,
+        turn_stds=turn_stds,
+        baseline_wr=baseline_wr,
+        baseline_turns=baseline_turns,
+        xlabel="History Length",
+        title_prefix="History Length Sweep",
+        filename="history_length_comparison.png",
+    )
 
     return results
 
@@ -588,11 +650,18 @@ def experiment_epsilon(
     turn_means = np.array([results[e]["turns_mean"] for e in epsilon_values])
     turn_stds = np.array([results[e]["turns_std"] for e in epsilon_values])
 
-    # --------------------------------------------------------------------
-    # STUDENT TASK: create your comparison plot here.
-    # Use `x`, `win_means`, `win_stds`, `turn_means`, `turn_stds`,
-    # `baseline_wr`, and `baseline_turns`.
-    # --------------------------------------------------------------------
+    save_two_panel_plot(
+        x=x,
+        win_means=win_means,
+        win_stds=win_stds,
+        turn_means=turn_means,
+        turn_stds=turn_stds,
+        baseline_wr=baseline_wr,
+        baseline_turns=baseline_turns,
+        xlabel="Epsilon",
+        title_prefix="Epsilon Sweep",
+        filename="epsilon_comparison.png",
+    )
 
     return results
 
@@ -671,11 +740,52 @@ def experiment_learning_curves(
 
     baseline_wr, baseline_turns = compute_random_baseline()
 
-    # --------------------------------------------------------------------
-    # STUDENT TASK: create your learning-curve plot here.
-    # Use `episodes`, `win_rate_mean`, `win_rate_std`, `turns_mean`,
-    # `turns_std`, `baseline_wr`, and `baseline_turns`.
-    # --------------------------------------------------------------------
+    output_dir = ensure_output_dir()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    ax1.plot(episodes, win_rate_mean, linewidth=2)
+    ax1.fill_between(
+        episodes,
+        win_rate_mean - win_rate_std,
+        win_rate_mean + win_rate_std,
+        alpha=0.2,
+    )
+    ax1.axhline(y=baseline_wr, color="red", linestyle="--", label="Random baseline")
+    ax1.set_xlabel("Training Episodes")
+    ax1.set_ylabel("Win Rate")
+    ax1.set_title("Learning Curve: Win Rate")
+    ax1.set_ylim(0.0, 1.05)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.plot(episodes, turns_mean, linewidth=2)
+    ax2.fill_between(
+        episodes,
+        turns_mean - turns_std,
+        turns_mean + turns_std,
+        alpha=0.2,
+    )
+    ax2.axhline(y=baseline_turns, color="red", linestyle="--", label="Random baseline")
+    ax2.set_xlabel("Training Episodes")
+    ax2.set_ylabel("Average Turns")
+    ax2.set_title("Learning Curve: Average Turns")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    figure_path = output_dir / "learning_curves.png"
+    fig.savefig(figure_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved plot to {figure_path}")
+
+    return {
+        "episodes": episodes,
+        "win_rate_mean": win_rate_mean,
+        "win_rate_std": win_rate_std,
+        "turns_mean": turns_mean,
+        "turns_std": turns_std,
+    }
 
 
 # ============================================================================
